@@ -13,6 +13,9 @@
 #include "lib/imgui/imgui.h"
 
 #include "src/ButtonWidget.hpp"
+#include "src/CollapsibleSectionWidget.hpp"
+#include "src/ConsoleWidget.hpp"
+
 #include "src/Camera.hpp"
 #include "src/Menu.hpp"
 #include "src/Mesh.hpp"
@@ -33,9 +36,10 @@ float lastX = WIDTH / 2.0f;
 float lastY = HEIGHT / 2.0f;
 bool firstMouse = true;
 Camera *camera_ptr = nullptr;
+bool camera_mode = true;
 
 void mouse_callback(GLFWwindow *window, double xpos, double ypos) {
-  if (!camera_ptr)
+  if (!camera_ptr || !camera_mode)
     return;
 
   if (firstMouse) {
@@ -58,26 +62,24 @@ int main(int argc, char **argv) {
 
   if (argc < 4) {
     std::cout << "usage: ./main (obj_file) (GL_POINTS or GL_TRIANGLES or GL_LINES) (distance) (optional: fps)\n";
-    std::cout << "example: ./main teapot.obj GL_LINES 10\n";
     return 0;
   }
 
   std::string_view chosen_render_mode(argv[2]);
-  if (chosen_render_mode == "GL_POINTS") {
+
+  if (chosen_render_mode == "GL_POINTS")
     mode = GL_POINTS;
-  } else if (chosen_render_mode == "GL_TRIANGLES") {
+  else if (chosen_render_mode == "GL_TRIANGLES")
     mode = GL_TRIANGLES;
-  } else if (chosen_render_mode == "GL_LINES") {
+  else if (chosen_render_mode == "GL_LINES")
     mode = GL_LINES;
-  } else {
+  else {
     std::cout << "Invalid render mode, must be: GL_POINTS, GL_TRIANGLES or GL_LINES\n";
-    std::cout << "You chose: " << chosen_render_mode;
     return 0;
   }
 
   if (!is_float(argv[3])) {
     std::cout << "Invalid distance, must be a number\n";
-    std::cout << "You chose: " << argv[3];
     return 0;
   }
 
@@ -85,7 +87,6 @@ int main(int argc, char **argv) {
     print_fps = true;
 
   float distance = std::stof(argv[3]);
-  std::ios_base::sync_with_stdio(false);
 
   if (!glfwInit()) {
     std::cerr << "Failed to initialize GLFW\n";
@@ -100,7 +101,7 @@ int main(int argc, char **argv) {
 
   GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, "OGL", nullptr, nullptr);
   if (!window) {
-    std::cerr << "Couldn't make window:(\n";
+    std::cerr << "Couldn't make window\n";
     glfwTerminate();
     return -1;
   }
@@ -110,9 +111,8 @@ int main(int argc, char **argv) {
 
   glfwMakeContextCurrent(window);
   glewExperimental = GL_TRUE;
-
-  if (glewInit() != GLEW_OK) {
-    std::cerr << "Couldn't init glew:(\n";
+  if (GLEW_OK != glewInit()) {
+    std::cerr << "Couldn't init glew\n";
     glfwTerminate();
     return -1;
   }
@@ -120,7 +120,6 @@ int main(int argc, char **argv) {
   glViewport(0, 0, screenWidth, screenHeight);
   glEnable(GL_DEPTH_TEST);
 
-  // Camera setup
   vec3 start_pos = {0.0f, 0.0f, 3.0f};
   Camera camera(start_pos);
   camera_ptr = &camera;
@@ -128,7 +127,15 @@ int main(int argc, char **argv) {
   glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
   glfwSetCursorPosCallback(window, mouse_callback);
 
-  Renderer r("shaders/shader.vert", "shaders/shader.frag", screenWidth, screenHeight, mode, distance);
+  IMGUI_CHECKVERSION();
+  ImGui::CreateContext();
+  ImGuiIO &io = ImGui::GetIO(); (void)io;
+  ImGui::StyleColorsDark();
+
+  ImGui_ImplGlfw_InitForOpenGL(window, true);
+  ImGui_ImplOpenGL3_Init("#version 330");
+
+  Renderer renderer("shaders/shader.vert", "shaders/shader.frag", screenWidth, screenHeight, mode, distance);
 
   std::optional<Model> model = load_obj(argv[1]);
   if (!model.has_value()) {
@@ -136,66 +143,125 @@ int main(int argc, char **argv) {
     glfwTerminate();
     return 0;
   }
-  r.add_model(std::move(model.value()));
+  renderer.add_model(std::move(model.value()));
 
-  // Setup Dear ImGui
-  IMGUI_CHECKVERSION();
-  ImGui::CreateContext();
-  ImGuiIO &io = ImGui::GetIO(); (void)io;
-  ImGui::StyleColorsDark();
-  ImGui_ImplGlfw_InitForOpenGL(window, true);
-  ImGui_ImplOpenGL3_Init("#version 330");
+  // Stats widget
+  class StatsWidget : public GUI::Widget {
+  public:
+    double &fps;
+    double &time;
+    int &ticks;
+    StatsWidget(double &fps_, double &time_, int &ticks_)
+        : fps(fps_), time(time_), ticks(ticks_) {}
+    void Render() override {
+      ImGui::Text("FPS: %.1f", fps);
+      ImGui::Text("Time: %.2f", time);
+      ImGui::Text("Ticks: %d", ticks);
+    }
+  };
 
-  // Create GUI menu and widgets
-  GUI::Menu menu("Menu");
-  menu.AddWidget(std::make_shared<GUI::ButtonWidget>("Print Hello", []() {
-    std::cout << "Hello from the GUI!\n";
-  }));
+  // Console widget
+  class ConsoleWidget : public GUI::Widget {
+  public:
+    std::vector<std::string> logs;
+    void AddLog(const std::string &log) { logs.push_back(log); }
+    void Render() override {
+      ImGui::BeginChild("ConsoleRegion", ImVec2(0, 150), true);
+      for (const auto &log : logs)
+        ImGui::TextUnformatted(log.c_str());
+      ImGui::EndChild();
+    }
+  };
 
-  double previous_time = glfwGetTime();
+  double fps_val = 0.0;
+  double time_val = 0.0;
   int ticks = 0;
-  double lastFrame = glfwGetTime();
+
+  GUI::Menu left_menu("Game engine menu");
+  auto stats_widget = std::make_shared<StatsWidget>(fps_val, time_val, ticks);
+  left_menu.AddWidget(stats_widget);
+
+  ConsoleWidget console_widget;
+  GUI::Menu bottom_console("Console", nullptr);
+  bottom_console.AddWidget(std::make_shared<ConsoleWidget>(console_widget));
 
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
 
     double currentFrame = glfwGetTime();
-    float delta_time = float(currentFrame - lastFrame);
-    lastFrame = currentFrame;
+    float delta_time = static_cast<float>(currentFrame - time_val);
+    time_val = currentFrame;
 
-    camera.processKeyboard(window, delta_time);
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+      if (camera_mode) {
+        camera_mode = false;
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        firstMouse = true;
+      } else {
+        camera_mode = true;
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+      }
+    }
+
+    if (camera_mode)
+      camera.processKeyboard(window, delta_time);
+
     camera.updateViewMatrix();
-    r.setViewMatrix(&camera.view_matrix[0][0]);
 
-    // Start new ImGui frame
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // Render GUI
-    menu.Render();
+    // Top menu bar
+    if (ImGui::BeginMainMenuBar()) {
+      if (ImGui::BeginMenu("Camera")) {
+        if (ImGui::MenuItem("Toggle Camera Mode", NULL, camera_mode)) {
+          camera_mode = !camera_mode;
+          if (camera_mode)
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+          else
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+          firstMouse = true;
+        }
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Settings")) {
+        ImGui::MenuItem("Placeholder", NULL, false, false);
+        ImGui::EndMenu();
+      }
+      ImGui::EndMainMenuBar();
+    }
 
-    // Render 3D content
-    r.draw_models();
+    // Render left menu (locked left panel)
+    left_menu.Render();
 
-    // Render ImGui
+    // Render bottom console window
+    ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - 150));
+    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, 150));
+    ImGuiWindowFlags console_flags =
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+    ImGui::Begin("Console", nullptr, console_flags);
+    console_widget.Render();
+    ImGui::End();
+
+    // Render OpenGL scene
+    renderer.setViewMatrix(&camera.view_matrix[0][0]);
+    renderer.draw_models();
+
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
 
     if (print_fps) {
-      double current_time = glfwGetTime();
-      double delta = current_time - previous_time;
-      std::cout << "Fps: " << 1.0 / delta << '\n';
-      std::cout << "Time: " << delta << '\n';
-      std::cout << "Ticks: " << ticks << '\n' << '\n';
-      previous_time = current_time;
-      ticks += 1;
+      fps_val = 1.0 / delta_time;
+      ticks++;
+      std::ostringstream oss;
+      oss << "FPS: " << fps_val << ", Time: " << time_val << ", Ticks: " << ticks;
+      console_widget.AddLog(oss.str());
     }
   }
 
-  // Cleanup ImGui
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();

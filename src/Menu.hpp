@@ -24,18 +24,19 @@ public:
 
   void Render() {
     if (*m_Open) {
-      // Lock the window to the left side of the screen
       ImGuiIO &io = ImGui::GetIO();
-      ImVec2 windowPos = ImVec2(0, 0);
-      ImVec2 windowSize = ImVec2(io.DisplaySize.x * 0.25f, io.DisplaySize.y);
+      float topBarHeight = ImGui::GetFrameHeightWithSpacing(); // use this instead of GetMainMenuBarHeight
+
+      ImVec2 windowPos = ImVec2(0, topBarHeight);
+      ImVec2 windowSize = ImVec2(io.DisplaySize.x * 0.25f, io.DisplaySize.y - topBarHeight);
 
       ImGui::SetNextWindowPos(windowPos);
       ImGui::SetNextWindowSize(windowSize);
 
-      // Prevent resizing/moving/collapsing
       ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoMove |
                                       ImGuiWindowFlags_NoResize |
-                                      ImGuiWindowFlags_NoCollapse;
+                                      ImGuiWindowFlags_NoCollapse |
+                                      ImGuiWindowFlags_NoBringToFrontOnFocus;
 
       ImGui::Begin(m_Title.c_str(), m_Open, window_flags);
 
