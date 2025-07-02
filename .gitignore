@@ -1,0 +1,21 @@
+# Ignore compiled binaries
+main
+*.o
+
+# Ignore build artifacts
+/build/
+/bin/
+/obj/
+
+# Ignore third-party libraries
+lib/
+
+# Ignore backup and temp files
+*~
+*.swp
+.DS_Store
+
+# Ignore Visual Studio Code or CLion configs
+.vscode/
+.idea/
+
